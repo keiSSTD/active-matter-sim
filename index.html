@@ -4,13 +4,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Active Brownian Particles Simulation (MIPS)</title>
+    <title>Active Brownian Particles (Optimized)</title>
     <style>
         :root {
             --bg-color: #121212;
             --text-color: #e0e0e0;
             --panel-bg: #1e1e1e;
-            --accent-color: #ff9800;
+            --accent-color: #00e676;
+            /* Green for optimized */
             --font-family: 'Inter', system-ui, -apple-system, sans-serif;
         }
 
@@ -46,13 +47,12 @@
             box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
             border-radius: 4px;
             border: 1px solid #333;
-            /* Fixed size */
             width: 600px;
             height: 600px;
             flex-shrink: 0;
         }
 
-        /* Simple UI Container below canvas */
+        /* UI Container */
         #ui-container {
             background-color: var(--panel-bg);
             padding: 20px;
@@ -62,7 +62,6 @@
             align-items: center;
             justify-content: center;
             width: 600px;
-            /* Match canvas width */
             box-sizing: border-box;
             border: 1px solid #333;
         }
@@ -114,19 +113,15 @@
         <div class="control-group">
             <label for="densityRange">
                 Count
-                <span id="densityValue" class="value-display">1000</span>
+                <span id="densityValue" class="value-display">3000</span>
             </label>
-            <input type="range" id="densityRange" min="100" max="2000" step="50" value="1000">
+            <input type="range" id="densityRange" min="500" max="5000" step="100" value="3000">
         </div>
     </div>
 
     <script>
         /**
-         * Active Brownian Particles Simulation (MIPS Tuned)
-         * 
-         * Physics: Overdamped Langevin dynamics
-         * dr/dt = v0 * n + mu * F_rep
-         * dtheta/dt = sqrt(2*Dr) * eta
+         * Active Brownian Particles Simulation (Optimized with Grid Partitioning)
          */
 
         const canvas = document.getElementById('simCanvas');
@@ -147,15 +142,21 @@
 
         // Parameters
         const PARAMS = {
-            speed: parseFloat(speedInput.value), // v0
+            speed: parseFloat(speedInput.value),
             count: parseInt(densityInput.value),
-            radius: 5,
+            radius: 4, // Adjusted for N=3000 to keep phi ~0.4
             dt: 0.02,
-            substeps: 8,
-            rotationalDiffusion: 0.5, // Dr
-            repulsionStiffness: 200.0, // k
+            substeps: 4,
+            rotationalDiffusion: 0.5,
+            repulsionStiffness: 200.0,
             neighborRadius: 20
         };
+
+        // Grid Partitioning
+        const CELL_SIZE = 20;
+        const COLS = Math.ceil(WIDTH / CELL_SIZE);
+        const ROWS = Math.ceil(HEIGHT / CELL_SIZE);
+        let grid = new Array(COLS * ROWS).fill(null).map(() => []);
 
         let particles = [];
 
@@ -167,7 +168,7 @@
                 this.neighbors = 0;
             }
 
-            update(particles) {
+            update() {
                 // Rotational diffusion
                 const noise = (Math.random() - 0.5) * 3.46;
                 this.theta += noise * Math.sqrt(2 * PARAMS.rotationalDiffusion * PARAMS.dt);
@@ -184,33 +185,49 @@
                 const minDistSq = minDist * minDist;
                 const neighborDistSq = PARAMS.neighborRadius * PARAMS.neighborRadius;
 
-                // Brute force O(N^2)
-                for (let i = 0; i < particles.length; i++) {
-                    const other = particles[i];
-                    if (other === this) continue;
+                // Grid-based neighbor search
+                const cx = (this.x / CELL_SIZE) | 0;
+                const cy = (this.y / CELL_SIZE) | 0;
 
-                    let dx = other.x - this.x;
-                    let dy = other.y - this.y;
+                for (let i = -1; i <= 1; i++) {
+                    for (let j = -1; j <= 1; j++) {
+                        let nx = cx + i;
+                        let ny = cy + j;
 
-                    // Periodic boundary
-                    if (Math.abs(dx) > WIDTH / 2) dx = dx - Math.sign(dx) * WIDTH;
-                    if (Math.abs(dy) > HEIGHT / 2) dy = dy - Math.sign(dy) * HEIGHT;
+                        if (nx < 0) nx = COLS - 1;
+                        else if (nx >= COLS) nx = 0;
 
-                    if (Math.abs(dx) > PARAMS.neighborRadius || Math.abs(dy) > PARAMS.neighborRadius) continue;
+                        if (ny < 0) ny = ROWS - 1;
+                        else if (ny >= ROWS) ny = 0;
 
-                    let distSq = dx * dx + dy * dy;
+                        const cellIndex = ny * COLS + nx;
+                        const cellParticles = grid[cellIndex];
 
-                    // Repulsion
-                    if (distSq < minDistSq && distSq > 0) {
-                        let dist = Math.sqrt(distSq);
-                        let forceMag = PARAMS.repulsionStiffness * (minDist - dist);
-                        fx -= (dx / dist) * forceMag;
-                        fy -= (dy / dist) * forceMag;
-                    }
+                        for (let k = 0; k < cellParticles.length; k++) {
+                            const other = cellParticles[k];
+                            if (other === this) continue;
 
-                    // Neighbor counting
-                    if (distSq < neighborDistSq) {
-                        this.neighbors++;
+                            let dx = other.x - this.x;
+                            let dy = other.y - this.y;
+
+                            if (Math.abs(dx) > WIDTH / 2) dx = dx - Math.sign(dx) * WIDTH;
+                            if (Math.abs(dy) > HEIGHT / 2) dy = dy - Math.sign(dy) * HEIGHT;
+
+                            if (Math.abs(dx) > PARAMS.neighborRadius || Math.abs(dy) > PARAMS.neighborRadius) continue;
+
+                            let distSq = dx * dx + dy * dy;
+
+                            if (distSq < minDistSq && distSq > 0) {
+                                let dist = Math.sqrt(distSq);
+                                let forceMag = PARAMS.repulsionStiffness * (minDist - dist);
+                                fx -= (dx / dist) * forceMag;
+                                fy -= (dy / dist) * forceMag;
+                            }
+
+                            if (distSq < neighborDistSq) {
+                                this.neighbors++;
+                            }
+                        }
                     }
                 }
 
@@ -220,11 +237,30 @@
                 this.x += vx * PARAMS.dt;
                 this.y += vy * PARAMS.dt;
 
-                // Wrap
                 if (this.x < 0) this.x += WIDTH;
                 if (this.x >= WIDTH) this.x -= WIDTH;
                 if (this.y < 0) this.y += HEIGHT;
                 if (this.y >= HEIGHT) this.y -= HEIGHT;
+            }
+        }
+
+        function updateGrid() {
+            for (let i = 0; i < grid.length; i++) {
+                grid[i].length = 0;
+            }
+
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+                let cx = (p.x / CELL_SIZE) | 0;
+                let cy = (p.y / CELL_SIZE) | 0;
+
+                if (cx >= COLS) cx = COLS - 1;
+                if (cx < 0) cx = 0;
+                if (cy >= ROWS) cy = ROWS - 1;
+                if (cy < 0) cy = 0;
+
+                const index = cy * COLS + cx;
+                grid[index].push(p);
             }
         }
 
@@ -253,7 +289,7 @@
             if (phi < 0.3) {
                 phiDisplay.style.color = '#ff5252';
             } else {
-                phiDisplay.style.color = '#4caf50';
+                phiDisplay.style.color = '#00e676';
             }
         }
 
@@ -283,25 +319,41 @@
             ctx.fillStyle = '#050505';
             ctx.fillRect(0, 0, WIDTH, HEIGHT);
 
-            for (let p of particles) {
+            // Batched rendering for performance with circles
+            // We group particles by color to minimize draw calls
+            ctx.beginPath();
+
+            const pathBlue = new Path2D();
+            const pathGreen = new Path2D();
+            const pathRed = new Path2D();
+
+            const r = PARAMS.radius;
+            const PI2 = Math.PI * 2;
+
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
                 const n = p.neighbors;
-                let color;
 
                 if (n < 3) {
-                    const intensity = Math.min(n / 3, 1) * 100;
-                    color = `rgb(${intensity}, ${100 + intensity}, 255)`;
+                    pathBlue.moveTo(p.x + r, p.y);
+                    pathBlue.arc(p.x, p.y, r, 0, PI2);
                 } else if (n < 6) {
-                    color = `rgb(0, 255, ${255 - (n - 3) * 80})`;
+                    pathGreen.moveTo(p.x + r, p.y);
+                    pathGreen.arc(p.x, p.y, r, 0, PI2);
                 } else {
-                    const intensity = Math.min((n - 6) / 4, 1);
-                    color = `rgb(255, ${Math.floor(255 * (1 - intensity))}, 0)`;
+                    pathRed.moveTo(p.x + r, p.y);
+                    pathRed.arc(p.x, p.y, r, 0, PI2);
                 }
-
-                ctx.fillStyle = color;
-                ctx.beginPath();
-                ctx.arc(p.x, p.y, PARAMS.radius, 0, Math.PI * 2);
-                ctx.fill();
             }
+
+            ctx.fillStyle = '#2196f3';
+            ctx.fill(pathBlue);
+
+            ctx.fillStyle = '#00e676';
+            ctx.fill(pathGreen);
+
+            ctx.fillStyle = '#ff5722';
+            ctx.fill(pathRed);
         }
 
         let lastTime = 0;
@@ -314,8 +366,9 @@
             }
 
             for (let s = 0; s < PARAMS.substeps; s++) {
+                updateGrid();
                 for (let p of particles) {
-                    p.update(particles);
+                    p.update();
                 }
             }
 
